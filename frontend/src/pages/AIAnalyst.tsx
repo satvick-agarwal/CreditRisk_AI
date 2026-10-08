@@ -37,72 +37,19 @@ export function AIAnalyst() {
     setLoading(true)
 
     try {
-      // Route the question to the appropriate API based on intent detection
-      let response = ''
-      let data: any = null
+      let response = '';
+      let data: any = null;
 
-      const lowerQ = q.toLowerCase()
+      // Send the entire conversation history to the agent (excluding the system prompt to keep it simple, or include it if desired)
+      // The backend agent handles tool calling dynamically
+      const historyToSent = [...messages, { role: 'user', content: q }]
+        .filter(m => m.role !== 'system') // Agent backend has its own system prompt
+        .map(m => ({ role: m.role, content: m.content }));
 
-      if (lowerQ.includes('applicant #') || lowerQ.match(/applicant\s+\d+/)) {
-        // Extract applicant ID
-        const match = q.match(/(\d+)/)
-        if (match) {
-          const id = parseInt(match[1])
-          try {
-            const riskRes = await axios.get(`${API_URL}/applicants/${id}/risk`)
-            data = riskRes.data
-            response = formatApplicantAnalysis(data)
-          } catch {
-            response = `Could not find applicant #${id} in the database. The applicant ID must match a record in our system.`
-          }
-        }
-      } else if (lowerQ.includes('risk driver') || lowerQ.includes('feature importance') || lowerQ.includes('what factors')) {
-        const res = await axios.get(`${API_URL}/model/metrics`)
-        const importance = res.data.shap_feature_importance?.slice(0, 10) || []
-        response = `## Top Risk Drivers (SHAP Analysis)\n\nBased on SHAP global feature importance computed on the validation set:\n\n`
-        importance.forEach(([name, val]: [string, number], i: number) => {
-          response += `${i + 1}. **${name}** — importance: ${val.toFixed(4)}\n`
-        })
-        response += `\nThese values represent the mean absolute SHAP contribution. Higher values indicate features that more strongly influence the model's default predictions.`
-      } else if (lowerQ.includes('default rate') || lowerQ.includes('credit score')) {
-        const res = await axios.get(`${API_URL}/dashboard/risk-distribution`)
-        data = res.data
+      const res = await axios.post(`${API_URL}/chat`, { messages: historyToSent });
+      response = res.data.response;
 
-        if (lowerQ.includes('below 600') || lowerQ.includes('under 600')) {
-          const poor = data.by_credit_score?.['Poor (300-579)']
-          if (poor) {
-            response = `## Default Rate for Credit Scores Below 600\n\n- **Default Rate:** ${(poor.default_rate * 100).toFixed(1)}%\n- **Count:** ${poor.count.toLocaleString()} applicants\n- **Defaults:** ${poor.defaults.toLocaleString()}\n\nThis segment has significantly elevated risk compared to the portfolio average.`
-          }
-        } else if (lowerQ.includes('loan purpose') || lowerQ.includes('intent')) {
-          response = `## Default Rates by Loan Purpose\n\n`
-          if (data.by_intent) {
-            Object.entries(data.by_intent).forEach(([intent, stats]: [string, any]) => {
-              response += `- **${intent}**: ${(stats.default_rate * 100).toFixed(1)}% default rate (${stats.count.toLocaleString()} loans)\n`
-            })
-          }
-        } else {
-          response = `## Default Rate Analysis\n\n### By Credit Score Band\n\n`
-          if (data.by_credit_score) {
-            Object.entries(data.by_credit_score).forEach(([band, stats]: [string, any]) => {
-              response += `- **${band}**: ${(stats.default_rate * 100).toFixed(1)}% (${stats.count.toLocaleString()} loans)\n`
-            })
-          }
-        }
-      } else if (lowerQ.includes('high-income') || lowerQ.includes('high income')) {
-        const res = await axios.get(`${API_URL}/portfolio/analytics`, { params: { income_min: 100000 } })
-        data = res.data
-        response = `## High-Income Borrower Analysis (Income > $100k)\n\n- **Count:** ${data.count.toLocaleString()} applicants\n- **Default Rate:** ${(data.default_rate * 100).toFixed(1)}%\n- **Average Credit Score:** ${data.avg_credit_score?.toFixed(0)}\n- **Average Loan Amount:** $${data.avg_loan?.toLocaleString()}\n- **Total Exposure:** $${(data.total_exposure / 1e6).toFixed(1)}M\n\nHigh-income borrowers in our portfolio show ${data.default_rate < 0.15 ? 'lower' : 'comparable'} default risk relative to the portfolio average.`
-      } else if (lowerQ.includes('model') || lowerQ.includes('performance') || lowerQ.includes('accuracy')) {
-        const res = await axios.get(`${API_URL}/model/metrics`)
-        const tm = res.data.test_metrics || {}
-        response = `## Model Performance Summary\n\n**Model:** ${res.data.selected_model} (${res.data.model_version})\n\n### Test Set Metrics\n| Metric | Value |\n|--------|-------|\n| ROC-AUC | ${tm.roc_auc} |\n| PR-AUC | ${tm.pr_auc} |\n| F1 Score | ${tm.f1} |\n| Recall | ${tm.recall} |\n| Precision | ${tm.precision} |\n| Brier Score | ${tm.brier_score} |\n\n**Note:** The test set was protected during training — these metrics represent an unbiased estimate of generalization performance.`
-      } else {
-        // Generic query — try portfolio summary
-        const res = await axios.get(`${API_URL}/dashboard/summary`)
-        response = `I can help analyze your credit risk portfolio. Here's the current summary:\n\n- **Total Applications:** ${res.data.total_applications?.toLocaleString()}\n- **Average PD:** ${(res.data.average_pd * 100).toFixed(1)}%\n- **Total Exposure:** $${(res.data.total_exposure / 1e6).toFixed(1)}M\n\nTry asking me specific questions like:\n- "What are the main risk drivers?"\n- "What is the default rate for credit scores below 600?"\n- "Analyze applicant #42"\n- "Compare default rates across loan purposes"`
-      }
-
-      setMessages(prev => [...prev, { role: 'assistant', content: response, data }])
+      setMessages(prev => [...prev, { role: 'assistant', content: response, data }]);
     } catch (e) {
       console.error(e)
       setMessages(prev => [...prev, { role: 'assistant', content: 'I encountered an error processing your query. Please try rephrasing your question.' }])

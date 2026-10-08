@@ -12,8 +12,10 @@ from sqlalchemy import select, func, case, and_
 from backend.app.core.database import get_db
 from backend.app.core.config import get_settings
 from backend.app.schemas.api import ApplicantInput, PredictionOutput, SimulationInput, SimulationOutput
+from backend.app.schemas.chat import ChatRequest
 from backend.app.models.database import Applicant, Prediction
 from backend.app.services.ml_service import ml_service
+from backend.app.ai.agent import handle_chat
 
 settings = get_settings()
 router = APIRouter(prefix="/api", tags=["api"])
@@ -416,3 +418,18 @@ async def get_applicant_risk(applicant_id: int, db: AsyncSession = Depends(get_d
 
     prediction = ml_service.predict(input_data)
     return PredictionOutput(applicant_id=applicant_id, **prediction)
+
+
+# ===========================================================================
+# CHAT AGENT
+# ===========================================================================
+
+@router.post("/chat")
+async def chat_with_agent(request: ChatRequest):
+    """Interact with the AI Credit Risk Agent."""
+    try:
+        messages = [{"role": m.role, "content": m.content} for m in request.messages]
+        response_text = await handle_chat(messages)
+        return {"response": response_text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

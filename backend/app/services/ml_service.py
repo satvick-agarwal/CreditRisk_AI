@@ -6,6 +6,10 @@ Loads persisted artifacts and performs predictions.
 import os
 import json
 import logging
+
+# Prevent joblib/loky subprocess hanging/warnings on Windows
+os.environ.setdefault("LOKY_MAX_CPU_COUNT", str(os.cpu_count() or 4))
+
 import joblib
 import pandas as pd
 from typing import Dict, Any, List
@@ -25,6 +29,7 @@ class MLService:
         self.risk_scorer = None
         self.metadata = None
         self.feature_config = None
+        self._tree_explainer = None
         
         # Risk Engine components
         self.risk_grader = RiskGrader()
@@ -129,35 +134,28 @@ class MLService:
 
     def _compute_local_shap(self, X_proc) -> Dict[str, float]:
         """Compute SHAP values for a single prediction if available."""
-        # For simplicity and speed in API, we'll use a fast approximation or pre-computed global importances 
-        # combined with local feature values if exact SHAP is too slow.
-        # But we'll try to load SHAP if available.
         import shap
         
         feature_names = self.feature_config["preprocessed_feature_names"]
         
         try:
-            # TreeExplainer is fast enough for real-time
             if self.metadata.get("selected_model") in ("xgboost", "lightgbm", "random_forest"):
-                # Needs the base model. If wrapped in CalibratedClassifierCV, we extract it.
-                base_model = self.model
-                if hasattr(self.model, "calibrated_classifiers_"):
-                    # Use the first calibrated classifier's base model as an approximation
-                    base_model = self.model.calibrated_classifiers_[0].estimator
+                if self._tree_explainer is None:
+                    base_model = self.model
+                    if hasattr(self.model, "calibrated_classifiers_"):
+                        base_model = self.model.calibrated_classifiers_[0].estimator
+                    self._tree_explainer = shap.TreeExplainer(base_model)
                 
-                explainer = shap.TreeExplainer(base_model)
-                shap_vals = explainer.shap_values(X_proc)
+                shap_vals = self._tree_explainer.shap_values(X_proc)
                 if isinstance(shap_vals, list):
                     shap_vals = shap_vals[1]
                 
                 contributions = dict(zip(feature_names, shap_vals[0].tolist()))
-                # Sort by absolute magnitude
                 return dict(sorted(contributions.items(), key=lambda x: abs(x[1]), reverse=True))
                 
         except Exception as e:
             logger.warning(f"Failed to compute local SHAP: {e}")
             
-        # Fallback to returning global feature importance
         return {}
 
 
